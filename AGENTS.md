@@ -238,3 +238,16 @@ uv run pre-commit run --all-files
 - CUDA preparation must not inherit the CPU worker's 12-GiB address-space cap:
   CUDA reserves much larger virtual ranges. Use Slurm memory limits, one worker
   per GPU, synchronized timing and explicit backend/precision in cache identities.
+## LeverageSHAP stability
+
+- Paired sampling at budget `2 * n` leaves `n - 1` independent interior
+  directions for `n - 1` free coefficients. Minimum-norm least squares can solve
+  the system accurately while amplifying nonadditive residuals enormously.
+- The reference repository added a low-budget `0.001 I` ridge safeguard in
+  `f3c0427`, then removed it in August 2026 audit commit `04cc121`. Shapiq PR #583
+  aligned sampling without restoring it. The old warning said `1e-6`, but the
+  executed Gram penalty was `1e-3`; fixed-count weights use the same scale here.
+- The projected Gram matrix always has the efficiency nullspace. Its full
+  condition number is therefore not a reliable test for statistical instability
+  in the remaining directions. Keep low-budget regularization explicit and
+  preserve the unregularized/full-enumeration paths in regression tests.
