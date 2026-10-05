@@ -128,7 +128,7 @@ def load_dataset(name: str, instance_seed: int = 0) -> tuple:
 def feature_limit(recipe: str, dataset: str) -> int:
     """Static upper bound; training-row variation is checked at construction."""
     info = DATASETS[dataset]
-    if recipe in ("local_gaussian", "local_copula", "cluster"):
+    if recipe in ("local_gaussian", "local_copula", "cluster", "cluster_continuous_v1"):
         categorical = info.get("categorical_features", [])
         return 0 if categorical == "all" else info["n_features"] - len(categorical)
     return info["n_features"]

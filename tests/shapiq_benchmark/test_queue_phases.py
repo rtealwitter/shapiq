@@ -212,8 +212,8 @@ def test_shared_preparation_records_allocation_and_rejects_changed_resume(
     with pytest.raises(ValueError, match="AMD EPYC 9754"):
         batch.verify_allocation(spec, "prepare", tmp_path, 2)
     observed["cpu_model"] = "AMD EPYC 9754"
-    observed["hostname"] = "gpu15"
-    with pytest.raises(ValueError, match="himem01 or himem02"):
+    observed["hostname"] = "gpu01"
+    with pytest.raises(ValueError, match="himem01, himem02 or gpu15"):
         batch.verify_allocation(spec, "prepare", tmp_path, 2)
     observed["hostname"] = "himem02"
     batch.verify_allocation({**spec, "device": "cuda"}, "evaluate", tmp_path, 2)
@@ -221,6 +221,21 @@ def test_shared_preparation_records_allocation_and_rejects_changed_resume(
     monkeypatch.setenv("OMP_NUM_THREADS", "2")
     with pytest.raises(ValueError, match="thread limits"):
         batch.verify_allocation(spec, "prepare", tmp_path, 2)
+
+
+def test_shared_gpu_host_cpu_allocation_retains_hardware_guards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CPU-only gpu15 work uses the same processor, affinity and thread contract."""
+    observed = {"hostname": "gpu15", "affinity": list(range(16)), "cpu_model": "AMD EPYC 9754"}
+    monkeypatch.setattr(batch, "hardware", lambda: observed)
+    for name in batch.THREAD_VARIABLES:
+        monkeypatch.setenv(name, "1")
+    batch.verify_allocation({"device": "cpu", "node": "gpu15"}, "prepare", tmp_path, 16)
+    assert json.loads((tmp_path / "prepare-allocation.json").read_text()) == observed
+    observed["cpu_model"] = "AMD EPYC 7763"
+    with pytest.raises(ValueError, match="AMD EPYC 9754"):
+        batch.verify_allocation({"device": "cpu"}, "prepare", tmp_path, 16)
 
 
 @pytest.mark.parametrize(

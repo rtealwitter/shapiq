@@ -403,6 +403,40 @@ def build_phase(phase: int, base: dict) -> dict:
     return suite
 
 
+def build_expansion(base: dict, *, structured: bool = False) -> dict:
+    """Full compatible inventory with explicit quality and CPU backend policies.
+
+    This is a new protocol identity, not a modification of historical phase
+    manifests. Selected recipes still need all-seed runtime qualification.
+    """
+    suite = build_phase(7 if structured else 6, base)
+    suite["name"] = "matrix-expansion-native-v1" if structured else "matrix-expansion-tables-v1"
+    suite["method_parameters"] = {"OddSHAP": {"ridge": 0.001}}
+    for kind in ("families", "games"):
+        for spec in suite[kind]:
+            if spec.get("family") == "cluster":
+                spec["family"] = "cluster_continuous_v1"
+                spec["id"] = spec["id"].replace("cluster-", "cluster_continuous_v1-", 1)
+            spec["quality_protocol"] = "quality-v2"
+            spec["id"] += "-quality-v2"
+            if "device" in spec:
+                spec["device"] = "cpu"
+        suite[kind].sort(key=lambda spec: (spec["n_players"], spec["id"]))
+    for row in suite["phase_plan"]["candidates"]:
+        if row["family"] == "cluster":
+            row["family"] = "cluster_continuous_v1"
+            row["id"] = row["id"].replace("cluster-", "cluster_continuous_v1-", 1)
+        row["preparation_device"] = "cpu"
+    for row in suite["protocol"]["constructions"]:
+        if row["id"] == "cluster":
+            row.update(id="cluster_continuous_v1", label="Continuous-feature clustering")
+    suite["protocol"]["preparation_devices"] = {
+        "all_models": "cpu; GPU backends require a separate measured qualification and new identity"
+    }
+    suite["protocol"]["expansion_policy"] = "full compatible matrix; no bounded-core selection"
+    return suite
+
+
 def main() -> None:
     """Write a frozen phase manifest without modifying the base suite."""
     parser = argparse.ArgumentParser(description=__doc__)

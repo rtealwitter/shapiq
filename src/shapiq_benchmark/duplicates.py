@@ -2,12 +2,59 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
+import os
+import socket
+import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+@contextmanager
+def registry_lock(registry: Path, *, timeout: float = 180) -> Iterator[None]:
+    """Serialize writers across hosts using atomic directory creation.
+
+    Hopper's advisory file locks are host-local. A killed writer can leave this
+    directory behind: fail closed and require verification of its recorded job
+    before an operator removes it, rather than guessing that a slow writer died.
+    """
+    directory = registry.with_suffix(".lock.d")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            directory.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                message = (
+                    f"Duplicate registry locked: inspect {directory / 'owner.json'} before recovery"
+                )
+                raise TimeoutError(message) from None
+            time.sleep(0.05)
+    owner = directory / "owner.json"
+    try:
+        owner.write_text(
+            json.dumps(
+                {
+                    "hostname": socket.gethostname(),
+                    "pid": os.getpid(),
+                    "job_id": os.environ.get("SLURM_JOB_ID"),
+                    "created_at": time.time(),
+                }
+            )
+            + "\n"
+        )
+        yield
+    finally:
+        owner.unlink(missing_ok=True)
+        directory.rmdir()
 
 
 def payoff_fingerprint(game: dict, root: Path) -> str | None:
@@ -34,8 +81,7 @@ def claim_games(snapshot: dict, root: Path, registry_path: Path) -> dict[str, st
     registry_path = Path(registry_path)
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     fingerprints = [(game, payoff_fingerprint(game, root)) for game in snapshot["games"]]
-    with registry_path.with_suffix(".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with registry_lock(registry_path):
         registry = json.loads(registry_path.read_text()) if registry_path.exists() else {}
         aliases = {}
         for game, fingerprint in fingerprints:

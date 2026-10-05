@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
+
 import numpy as np
 import pytest
 
-from shapiq_benchmark.duplicates import claim_games, payoff_fingerprint, remove_aliases
+from shapiq_benchmark.duplicates import (
+    claim_games,
+    payoff_fingerprint,
+    registry_lock,
+    remove_aliases,
+)
 
 
 def game(tmp_path, name, values, index="SV"):
@@ -63,3 +72,32 @@ def test_control_registration_cannot_skip_equivalent_core_game(tmp_path):
         item["metadata"] = {"game_quality": {"role": role}}
         snapshot = {"snapshot_id": name, "games": [item]}
         assert claim_games(snapshot, tmp_path, registry) == expected
+
+
+def _claim_copy(root, name):
+    item = game(root, name, [0, 1, 2, 3])
+    return claim_games({"snapshot_id": name, "games": [item]}, root, root / "registry.json")
+
+
+def test_concurrent_writers_choose_one_canonical_game(tmp_path):
+    with ProcessPoolExecutor(
+        max_workers=4, mp_context=multiprocessing.get_context("spawn")
+    ) as pool:
+        results = list(pool.map(_claim_copy, [tmp_path] * 4, ["a", "b", "c", "d"]))
+    assert sum(not aliases for aliases in results) == 1
+    assert len({canonical for aliases in results for canonical in aliases.values()}) == 1
+    assert len(json.loads((tmp_path / "registry.json").read_text())) == 1
+    assert not (tmp_path / "registry.lock.d").exists()
+
+
+def test_lock_timeout_preserves_owner_and_exceptions_release(tmp_path):
+    registry = tmp_path / "registry.json"
+    with pytest.raises(ValueError, match="writer failed"), registry_lock(registry):
+        owner = tmp_path / "registry.lock.d" / "owner.json"
+        original = owner.read_bytes()
+        with pytest.raises(TimeoutError, match=r"owner\.json"), registry_lock(registry, timeout=0):
+            pytest.fail("An occupied lock must not be stolen")
+        assert owner.read_bytes() == original
+        message = "writer failed"
+        raise ValueError(message)
+    assert not (tmp_path / "registry.lock.d").exists()

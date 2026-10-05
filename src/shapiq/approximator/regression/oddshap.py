@@ -112,10 +112,8 @@ class OddSHAP(Approximator):
     Note:
         Where Algorithm 1 of the paper falls back to TreeSHAP for budgets below
         ``n * interaction_factor``, this implementation expands the selection of
-        active terms also to individuals, allowing a minimum budget of
-        ``interaction_factor``. Below that, it raises ``ValueError``
-        (no silent downgrade to another estimator), unless the budget already covers
-        the full coalition space (``budget >= 2**n``). It therefore does not reproduce
+        active terms also to individuals, allowing budgets of at least two
+        evaluations for the empty and grand coalitions. It therefore does not reproduce
         the low-budget, high-dimension regime of the paper's Figure 2.
 
         The active support's candidate budget (``ceil(budget / interaction_factor)``)
@@ -166,6 +164,7 @@ class OddSHAP(Approximator):
         random_state: int | None = None,
         interaction_factor: int = 10,  # eta; paper default
         tree_params: dict[str, Any] | None = None,
+        ridge: float = 0.0,
         **kwargs: Any,
     ) -> None:
         """Initialize the OddSHAP approximator.
@@ -173,8 +172,18 @@ class OddSHAP(Approximator):
         ``tree_params`` entries override the surrogate defaults — including
         ``random_state``, ``n_jobs``, and ``verbose``; ``max_depth`` defaults to 10
         (the paper's configuration) unless overridden.
+
+        ``ridge`` is an optional finite, nonnegative penalty on the free Fourier
+        coefficients. It applies only at budgets at most ``3 * n`` that do not
+        enumerate every coalition. The default preserves unregularized OddSHAP.
+        Shrinkage preserves efficiency and the selected support, but introduces
+        bias; it cannot recover singleton terms omitted by support screening.
         """
         del kwargs
+        if not np.isfinite(ridge) or ridge < 0:
+            msg = "ridge must be finite and nonnegative."
+            raise ValueError(msg)
+        self.ridge = float(ridge)
 
         # OddSHAP's own coalition-size distribution; set before super().__init__,
         # which builds the sampler.
@@ -224,27 +233,11 @@ class OddSHAP(Approximator):
             Estimated first-order Shapley values.
 
         Raises:
-            ValueError: If ``budget < min(interaction_factor, 2**n)``, i.e. the
-                budget is below the eta-based minimum and does not cover the full
-                coalition space either. Algorithm 1 of the paper falls back to TreeSHAP
-                in this regime; this implementation deliberately raises instead, so an
-                under-budgeted call never silently returns a different estimator's
-                values.
+            ValueError: If ``budget < 2``, as both the empty and grand coalitions
+                must be evaluated.
             RuntimeError: If the sampled coalitions do not contain the empty or grand coalition.
         """
         del kwargs
-
-        # Fail fast before any (possibly expensive) game evaluation. A budget that
-        # covers the full coalition space is always sufficient, even when 2**n is
-        # smaller than the eta-based minimum (small n).
-        minimum_budget = min(self.interaction_factor, 2**self.n)
-        if budget < minimum_budget:
-            msg = (
-                "The budget is too small for OddSHAP. "
-                f"Received budget={budget}, but at least {minimum_budget} evaluations are required. "
-                "Please increase the budget."
-            )
-            raise ValueError(msg)
 
         self._sampler.sample(budget)
         coalitions = self._sampler.coalitions_matrix
@@ -324,6 +317,7 @@ class OddSHAP(Approximator):
             y_tilde=y_tilde,
             empty_set_value=empty_set_value,
             full_set_value=full_set_value,
+            ridge=self.ridge if budget <= 3 * self.n and budget < 2**self.n else 0.0,
         )
         sv_values = self._transform_to_shapley(
             odd_fourier_coefficients,
@@ -696,6 +690,7 @@ class OddSHAP(Approximator):
         y_tilde: np.ndarray,
         empty_set_value: float,
         full_set_value: float,
+        ridge: float = 0.0,
     ) -> np.ndarray:
         """Solve the constrained OddSHAP regression in the Fourier basis.
 
@@ -724,7 +719,20 @@ class OddSHAP(Approximator):
         y_projected = y_tilde - b * row_mean
 
         # Solve for the free projected coordinates
-        z_solution = np.linalg.lstsq(X_projected, y_projected, rcond=None)[0]
+        if ridge and X_projected.shape[0]:
+            # SVD avoids squaring the condition number or allocating a dense
+            # penalty matrix. The efficiency null direction remains excluded.
+            U, singular, Vt = np.linalg.svd(X_projected, full_matrices=False)
+            cutoff = np.finfo(float).eps * max(X_projected.shape) * singular[0]
+            gains = np.divide(
+                singular,
+                singular**2 + ridge,
+                out=np.zeros_like(singular),
+                where=singular > cutoff,
+            )
+            z_solution = Vt.T @ (gains * (U.T @ y_projected))
+        else:
+            z_solution = np.linalg.lstsq(X_projected, y_projected, rcond=None)[0]
 
         # Reconstruct the constrained non-empty coefficient vector:
         # beta_const + (I - ones(K,K)/K) @ z_solution == b/K + z_solution - mean(z_solution).

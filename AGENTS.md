@@ -357,6 +357,11 @@ uv run pre-commit run --all-files
   terminal scheduler state, complete manifests, and stable authenticated hashes.
   Shared duplicate registries likewise need same-host writers or a separately
   qualified distributed locking mechanism before multi-host evaluation.
+  The matrix expansion uses atomic `.lock.d` directory creation for its duplicate
+  registry; a two-host probe verified exclusion and subsequent acquisition on
+  himem01/himem02. A killed writer can leave the directory behind. Inspect its
+  `owner.json` and verify that writer/job is terminal before removing the stale
+  lock; elapsed time alone does not authorize taking ownership.
 - Historical exports can contain constructor options absent from the exporting
   checkout (for example OddSHAP `ridge` from a frozen experimental branch).
   Authenticate the recorded source and parameter schema without requiring the
@@ -418,3 +423,7 @@ uv run pre-commit run --all-files
   Enabling controls in the real panel does not include synthetic diagnostics.
   Phase five has 90 real core, 34 real control and 24 synthetic control instances;
   browser audits must check both panels instead of expecting all 148 in one view.
+
+- Native tree reconstruction arrays can contain NaN thresholds for unused leaf
+  nodes. Validate finiteness of active split thresholds and every other numeric
+  array; rejecting that explicit leaf sentinel incorrectly rejects valid games.

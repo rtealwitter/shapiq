@@ -34,9 +34,11 @@ def verify_allocation(batch: dict, step: str, root: Path, workers: int | None = 
         if (
             workers > len(cpus)
             or "EPYC 9754" not in observed["cpu_model"]
-            or observed["hostname"].split(".")[0] not in {"himem01", "himem02"}
+            or observed["hostname"].split(".")[0] not in {"himem01", "himem02", "gpu15"}
         ):
-            message = "Shared CPU work requires enough AMD EPYC 9754 cores on himem01 or himem02"
+            message = (
+                "Shared CPU work requires enough AMD EPYC 9754 cores on himem01, himem02 or gpu15"
+            )
             raise ValueError(message)
         if any(os.environ.get(name) != "1" for name in THREAD_VARIABLES):
             message = "Shared CPU work requires all declared thread limits to equal one"
@@ -224,7 +226,7 @@ def main() -> None:
     parser.add_argument(
         "--workers",
         type=int,
-        help="Workers on shared himem01/02 CPU allocation; timings are diagnostic (not CUDA prep)",
+        help="Workers on shared himem01/02 or gpu15 CPUs; timings are diagnostic (not CUDA prep)",
     )
     args = parser.parse_args()
     run_batch(args.manifest, args.step, args.index, args.workers)

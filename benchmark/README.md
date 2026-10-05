@@ -776,6 +776,46 @@ no server, account system, database, or upload API.
 
 ## Implementation and next steps
 
+### Full matrix expansion
+
+The expansion inventories all compatible dataset × model × construction × player-count
+combinations. It keeps four game instances, one estimator seed and budgets of
+0.5, 1, 2, 4, 8, 16, 32, 64 and 128 times the number of players. Incompatible
+combinations and failed qualification checks remain explicit exclusions.
+
+The execution path is deliberately split into small steps:
+
+1. `plan_expansion.py` writes immutable inventories and batches. It applies
+   `quality-v2` independently of any recipe limit and reuses only configurations
+   authenticated by a reviewed completion ledger. New clustering games use
+   `cluster_continuous_v1`; older games retain their original identities.
+2. `queue_expansion.py` creates a reviewable Slurm plan. Submission is a separate
+   `--submit` action with a durable journal; an ambiguous response is never retried
+   automatically.
+3. `warm_expansion.py` warms dataset caches serially and checks stable reloads.
+   `run_expansion.py` then runs the existing qualification/preparation/evaluation
+   code from a frozen checkout with authenticated dependencies.
+4. `audit_expansion.py` checks complete grids, recorded sources, query limits,
+   numerical scores, timing metadata and duplicates. A failed audit blocks the
+   next wave. Independent completed-output review and publication follow separately.
+
+The chosen ceiling is **128 shared CPU cores**, with eight concurrent 16-worker
+jobs at most, distributed across verified EPYC 9754 hosts. Preparation and
+evaluation use separate dependency stages, so their caps cannot add together.
+Each job initially requests 208 GiB to accommodate the existing 12-GiB worker
+limits and overhead. No whole node or production GPU is reserved. GPU preparation
+requires a separate measured speedup and the 80% utilization gate.
+
+Waves progress through increasing enumerated player counts, then native structured
+games. Exact enumeration remains capped at 20 players; larger games need a qualified
+specialized solver. Preparation cost, model quality and nonzero-signal checks still
+apply. Scheduler completion alone is never evidence that a wave passed.
+
+Runtime plans, journals, payoff tables and records belong on the lab drive, outside
+Git. The full inventory contains roughly 50 million raw evaluation cells before
+qualification and reuse. Early-wave measurements refine the resource estimate;
+the small selected campaign does not provide a reliable completion date for d=20.
+
 The five initial phases are implemented and independently reviewed:
 
 1. Frozen local pilot, counted budgets, nMSE, and private candidate adapter.
